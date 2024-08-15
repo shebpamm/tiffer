@@ -23,7 +23,7 @@ fn main() -> anyhow::Result<()> {
         }
     };
 
-    println!("Deck: {:#?}", deck);
+    deck.download()?;
 
     Ok(())
 }
