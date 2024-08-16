@@ -1,6 +1,8 @@
 use std::io::{self, prelude::*};
 use std::{fs::File, io::BufReader, path::PathBuf};
 
+use serde::Deserialize;
+
 use crate::deck::{Card, Deck};
 
 pub fn get_local_deck(path: PathBuf) -> anyhow::Result<Deck> {
@@ -8,26 +10,45 @@ pub fn get_local_deck(path: PathBuf) -> anyhow::Result<Deck> {
     let reader = BufReader::new(file);
 
     let mut cards: Vec<Card> = Vec::new();
+    let mut tokens: Vec<Card> = Vec::new();
 
     for line in reader.lines() {
         let line = line?;
 
-        let parsed = parse_card(&line)?;
+        let (parsed_cards, parsed_tokens) = parse_card(&line)?;
 
-        for card in parsed {
+        for card in parsed_cards {
             cards.push(card);
+        }
+
+        for token in parsed_tokens {
+            tokens.push(token);
         }
     }
 
     Ok(Deck {
         name: "deck".to_string(),
         cards,
-        tokens: Vec::new(),
+        tokens,
     })
 }
 
+#[derive(Debug, Deserialize)]
+struct ScryfallCard {
+    name: String,
+    id: String,
+    all_parts: Option<Vec<ScryfallRelatedCard>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ScryfallRelatedCard {
+    name: String,
+    component: String,
+    id: String,
+}
+
 // example card: 1 Whiptongue Hydra (NEC) 134
-fn parse_card(line: &str) -> anyhow::Result<Vec<Card>> {
+fn parse_card(line: &str) -> anyhow::Result<(Vec<Card>, Vec<Card>)> {
     let parts: Vec<&str> = line.split_whitespace().collect();
     let quantity = parts[0].parse::<u32>()?;
     let name = parts[1..parts.len() - 2].join(" ");
@@ -36,27 +57,35 @@ fn parse_card(line: &str) -> anyhow::Result<Vec<Card>> {
 
     println!("{} {} {} {}", quantity, name, set, collector_number);
 
-    let scryfall_id = get_card_uuid(&name, set, collector_number)?;
+    let details = get_card_details(&name, set, collector_number)?;
 
     let mut cards = Vec::new();
+    let mut tokens = Vec::new();
     for _ in 0..quantity {
         let card = Card {
-            name: name.clone(),
-            scryfall_id: scryfall_id.clone(),
+            name: details.name.clone(),
+            scryfall_id: details.id.clone(),
         };
+
+        if let Some(details) = &details.all_parts {
+            for related in details {
+                if related.component == "token" {
+                    let token = Card {
+                        name: related.name.clone(),
+                        scryfall_id: related.id.clone(),
+                    };
+                    tokens.push(token);
+                }
+            }
+        }
 
         cards.push(card);
     }
 
-    Ok(cards)
+    Ok((cards, tokens))
 }
 
-fn get_card_uuid(name: &str, set: &str, collector_number: &str) -> anyhow::Result<String> {
-    #[derive(Debug, serde::Deserialize)]
-    struct Response {
-        pub id: String,
-    }
-
+fn get_card_details(name: &str, set: &str, collector_number: &str) -> anyhow::Result<ScryfallCard> {
     let client = reqwest::blocking::Client::builder()
         .user_agent("curl/7.68.0")
         .default_headers({
@@ -74,7 +103,7 @@ fn get_card_uuid(name: &str, set: &str, collector_number: &str) -> anyhow::Resul
         .query(&[("exact", name), ("set", set), ("collector_number", collector_number)])
         .send()?;
 
-    let Response { id } = resp.json()?;
+    let card: ScryfallCard = resp.json()?;
 
-    Ok(id)
+    Ok(card)
 }
