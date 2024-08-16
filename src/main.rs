@@ -1,5 +1,6 @@
 use clap::Parser;
 use tiffer::deck::Deck;
+use tiffer::local::get_local_deck;
 use tiffer::remote::get_remote_deck;
 use tiffer::source::Source;
 
@@ -19,7 +20,7 @@ fn main() -> anyhow::Result<()> {
         }
         Source::File(path) => {
             println!("Deck from local: {}", path.to_str().unwrap());
-            todo!()
+            get_local_deck(path)?
         }
     };
 
