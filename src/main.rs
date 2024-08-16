@@ -23,7 +23,7 @@ fn main() -> anyhow::Result<()> {
         }
     };
 
-    deck.download()?;
+    deck.generate()?;
 
     Ok(())
 }
