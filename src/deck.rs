@@ -33,8 +33,21 @@ impl Deck {
         self.cards.len() + self.tokens.len()
     }
 
+    fn cache_dir(&self) -> String {
+        format!(
+            "{}/tiffer/cards",
+            std::env::var("XDG_CACHE_HOME").unwrap_or_else(|_| {
+                format!(
+                    "{}/.cache",
+                    std::env::var("HOME").expect("HOME environment variable not set")
+                )
+            })
+        )
+    }
+
     pub async fn download(&self, options: DeckGenerationOptions) -> anyhow::Result<()> {
-        fs::create_dir_all("cards")?;
+        let cache_dir = self.cache_dir();
+        fs::create_dir_all(&cache_dir)?;
 
         // Create reqwest client
         let client = reqwest::Client::builder()
@@ -58,8 +71,9 @@ impl Deck {
         for card in self.cards.iter().chain(self.tokens.iter()) {
             let client = Arc::clone(&client);
             let card = card.clone(); // Assuming `Card` implements `Clone`
+            let cache_dir = cache_dir.clone();
 
-            let task = task::spawn(async move { card.download(&client).await });
+            let task = task::spawn(async move { card.download(cache_dir.clone(), &client).await });
 
             tasks.push(task);
         }
@@ -89,6 +103,8 @@ impl Deck {
     }
 
     fn pdf(&self) -> anyhow::Result<()> {
+        let cache_dir = self.cache_dir();
+
         let (doc, page_idx, layer_idx) = PdfDocument::new("Deck", Mm(210.0), Mm(297.0), "Layer");
 
         let (card_width, card_height) = (Mm(63.0), Mm(87.8));
@@ -117,8 +133,9 @@ impl Deck {
 
         for card in self.cards.iter().chain(self.tokens.iter()) {
             println!("Rendering {}", card.name);
-            let mut image_file =
-                BufReader::new(File::open(format!("{}/{}.jpg", "cards", card.scryfall_id)).unwrap());
+            let mut image_file = BufReader::new(
+                File::open(format!("{}/{}.jpg", cache_dir, card.scryfall_id)).unwrap(),
+            );
             let image = Image::try_from(
                 image_crate::codecs::jpeg::JpegDecoder::new(&mut image_file).unwrap(),
             )
@@ -171,8 +188,8 @@ impl Card {
         )
     }
 
-    pub async fn download(&self, client: &Client) -> anyhow::Result<()> {
-        let file_path = format!("{}/{}.jpg", "cards", self.scryfall_id);
+    pub async fn download(&self, cache: String, client: &Client) -> anyhow::Result<()> {
+        let file_path = format!("{}/{}.jpg", cache, self.scryfall_id);
         if fs::metadata(&file_path).is_ok() {
             println!("Skipping {}", self.name);
             return Ok(());
@@ -189,7 +206,7 @@ impl Card {
             let response = client.get(self.image_url()).send().await;
 
             match response {
-                Ok( resp) => {
+                Ok(resp) => {
                     if resp.status().is_success() {
                         let mut file = fs::File::create(&file_path)?;
                         std::io::copy(&mut resp.bytes().await?.as_ref(), &mut file)?;
