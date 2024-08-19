@@ -20,10 +20,10 @@ enum Website {
     Moxfield,
 }
 
-pub fn get_remote_deck(url: Url) -> anyhow::Result<Deck> {
+pub async fn get_remote_deck(url: Url) -> anyhow::Result<Deck> {
     let website = parse_url(&url)?;
     match website {
-        Website::Moxfield => Ok(get_moxfield_deck(url)?),
+        Website::Moxfield => Ok(get_moxfield_deck(url).await?),
     }
 }
 
@@ -34,7 +34,7 @@ fn parse_url(url: &Url) -> anyhow::Result<Website> {
     }
 }
 
-fn get_moxfield_deck(url: Url) -> anyhow::Result<Deck> {
+async fn get_moxfield_deck(url: Url) -> anyhow::Result<Deck> {
     #[derive(Debug, Deserialize)]
     struct MoxfieldCard {
         pub quantity: u32,
@@ -57,11 +57,10 @@ fn get_moxfield_deck(url: Url) -> anyhow::Result<Deck> {
 
     let deck_id = url.path_segments().unwrap().nth(1).unwrap();
     let deck_url = format!("{}/{}", MOXFIELD_API_URL, deck_id);
-    let response = reqwest::blocking::get(deck_url)?;
+    let response = reqwest::get(deck_url).await?;
 
     // pretty-print json for easier debugging
-
-    let data = serde_json::to_string_pretty(&response.json::<serde_json::Value>()?)?;
+    let data = serde_json::to_string_pretty(&response.json::<serde_json::Value>().await?)?;
 
     let response: MoxfieldResponse = serde_json::from_str(&data)?;
 

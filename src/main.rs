@@ -10,21 +10,26 @@ struct Cli {
     source: Source,
 }
 
-fn main() -> anyhow::Result<()> {
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
     let args = Cli::parse();
 
     let deck: Deck = match args.source {
         Source::Link(url) => {
             println!("Fetching deck from remote: {}", url);
-            get_remote_deck(url)?
+            get_remote_deck(url).await?
         }
         Source::File(path) => {
             println!("Deck from local: {}", path.to_str().unwrap());
-            get_local_deck(path)?
+            get_local_deck(path).await?
         }
     };
 
-    deck.generate()?;
+    deck.generate(tiffer::deck::DeckGenerationOptions {
+        filename: None,
+        print_tokens: true,
+    })
+    .await?;
 
     Ok(())
 }

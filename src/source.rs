@@ -14,10 +14,9 @@ impl FromStr for Source {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         // Attempt to parse as a path
-        if let Ok(path) = PathBuf::from_str(s) {
-            if path.is_file() {
-                return Ok(Source::File(path));
-            }
+        let Ok(path) = PathBuf::from_str(s);
+        if path.is_file() {
+            return Ok(Source::File(path));
         }
 
         if let Ok(url) = Url::parse(s) {

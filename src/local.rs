@@ -1,11 +1,11 @@
-use std::io::{self, prelude::*};
+use std::io::prelude::*;
 use std::{fs::File, io::BufReader, path::PathBuf};
 
 use serde::Deserialize;
 
 use crate::deck::{Card, Deck};
 
-pub fn get_local_deck(path: PathBuf) -> anyhow::Result<Deck> {
+pub async fn get_local_deck(path: PathBuf) -> anyhow::Result<Deck> {
     let file = File::open(path)?;
     let reader = BufReader::new(file);
 
@@ -15,7 +15,7 @@ pub fn get_local_deck(path: PathBuf) -> anyhow::Result<Deck> {
     for line in reader.lines() {
         let line = line?;
 
-        let (parsed_cards, parsed_tokens) = parse_card(&line)?;
+        let (parsed_cards, parsed_tokens) = parse_card(&line).await?;
 
         for card in parsed_cards {
             cards.push(card);
@@ -48,7 +48,7 @@ struct ScryfallRelatedCard {
 }
 
 // example card: 1 Whiptongue Hydra (NEC) 134
-fn parse_card(line: &str) -> anyhow::Result<(Vec<Card>, Vec<Card>)> {
+async fn parse_card(line: &str) -> anyhow::Result<(Vec<Card>, Vec<Card>)> {
     let parts: Vec<&str> = line.split_whitespace().collect();
     let quantity = parts[0].parse::<u32>()?;
     let name = parts[1..parts.len() - 2].join(" ");
@@ -57,7 +57,7 @@ fn parse_card(line: &str) -> anyhow::Result<(Vec<Card>, Vec<Card>)> {
 
     println!("{} {} {} {}", quantity, name, set, collector_number);
 
-    let details = get_card_details(&name, set, collector_number)?;
+    let details = get_card_details(&name, set, collector_number).await?;
 
     let mut cards = Vec::new();
     let mut tokens = Vec::new();
@@ -85,8 +85,8 @@ fn parse_card(line: &str) -> anyhow::Result<(Vec<Card>, Vec<Card>)> {
     Ok((cards, tokens))
 }
 
-fn get_card_details(name: &str, set: &str, collector_number: &str) -> anyhow::Result<ScryfallCard> {
-    let client = reqwest::blocking::Client::builder()
+async fn get_card_details(name: &str, set: &str, collector_number: &str) -> anyhow::Result<ScryfallCard> {
+    let client = reqwest::Client::builder()
         .user_agent("curl/7.68.0")
         .default_headers({
             let mut headers = reqwest::header::HeaderMap::new();
@@ -101,9 +101,9 @@ fn get_card_details(name: &str, set: &str, collector_number: &str) -> anyhow::Re
     let resp = client
         .get("https://api.scryfall.com/cards/named")
         .query(&[("exact", name), ("set", set), ("collector_number", collector_number)])
-        .send()?;
+        .send().await?;
 
-    let card: ScryfallCard = resp.json()?;
+    let card: ScryfallCard = resp.json().await?;
 
     Ok(card)
 }

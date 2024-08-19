@@ -6,8 +6,14 @@ use std::io::BufWriter;
 use printpdf::path::{PaintMode, WindingOrder};
 use printpdf::*;
 
+use reqwest::Client;
 use serde::Deserialize;
 use serde::Serialize;
+
+pub struct DeckGenerationOptions {
+    pub print_tokens: bool,
+    pub filename: Option<String>,
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Deck {
@@ -21,11 +27,11 @@ impl Deck {
         self.cards.len() + self.tokens.len()
     }
 
-    pub fn download(&self) -> anyhow::Result<()> {
+    pub async fn download(&self, options: DeckGenerationOptions) -> anyhow::Result<()> {
         std::fs::create_dir_all("cards")?;
 
         // make sure to add User-Agent and Accept headers
-        let client = reqwest::blocking::Client::builder()
+        let client = reqwest::Client::builder()
             .user_agent("curl/7.68.0")
             .default_headers({
                 let mut headers = reqwest::header::HeaderMap::new();
@@ -38,21 +44,13 @@ impl Deck {
             .build()?;
 
         for card in self.cards.iter().chain(self.tokens.iter()) {
-            if std::fs::metadata(format!("{}/{}.jpg", "cards", card.scryfall_id)).is_ok() {
-                println!("Skipping {}", card.name);
-                continue;
-            }
-
-            println!("Downloading {}", card.name);
-            let response = client.get(card.image_url()).send()?;
-            let mut file = std::fs::File::create(format!("{}/{}.jpg", "cards", card.scryfall_id))?;
-            std::io::copy(&mut response.bytes().unwrap().as_ref(), &mut file)?;
+            card.download(&client).await?;
         }
 
         Ok(())
     }
 
-    pub fn generate(&self) -> anyhow::Result<()> {
+    pub async fn generate(&self, options: DeckGenerationOptions) -> anyhow::Result<()> {
         println!("Generating deck: {}", self.name);
         println!(
             "Total cards: {} ({} mainboard, {} tokens)",
@@ -61,7 +59,7 @@ impl Deck {
             self.tokens.len()
         );
 
-        self.download()?;
+        self.download(options).await?;
 
         self.pdf()?;
 
@@ -69,7 +67,7 @@ impl Deck {
     }
 
     fn pdf(&self) -> anyhow::Result<()> {
-        let (doc, pageIdx, layerIdx) = PdfDocument::new("Deck", Mm(210.0), Mm(297.0), "Layer");
+        let (doc, page_idx, layer_idx) = PdfDocument::new("Deck", Mm(210.0), Mm(297.0), "Layer");
 
         let (card_width, card_height) = (Mm(63.0), Mm(87.8));
 
@@ -78,7 +76,7 @@ impl Deck {
         let mut x = (Mm(210.0) - total_row_width) / 2.0;
         let mut y = Mm(297.0) - card_height - Mm(15.0);
 
-        let mut layer = doc.get_page(pageIdx).get_layer(layerIdx);
+        let mut layer = doc.get_page(page_idx).get_layer(layer_idx);
 
         // reference size box for card
         let points = vec![
@@ -111,7 +109,7 @@ impl Deck {
 
             if y < Mm(0.0) {
                 let (new_page_idx, _) = doc.add_page(Mm(210.0), Mm(297.0), "Layer 1");
-                layer = doc.get_page(new_page_idx).get_layer(layerIdx);
+                layer = doc.get_page(new_page_idx).get_layer(layer_idx);
                 y = Mm(297.0) - card_height - Mm(15.0);
             }
 
@@ -149,5 +147,18 @@ impl Card {
             "https://api.scryfall.com/cards/{}/?format=image",
             self.scryfall_id
         )
+    }
+
+    pub async fn download(&self, client: &Client) -> anyhow::Result<()> {
+        if std::fs::metadata(format!("{}/{}.jpg", "cards", self.scryfall_id)).is_ok() {
+            println!("Skipping {}", self.name);
+            return Ok(());
+        }
+
+        println!("Downloading {}", self.name);
+        let response = client.get(self.image_url()).send().await?;
+        let mut file = std::fs::File::create(format!("{}/{}.jpg", "cards", self.scryfall_id))?;
+        std::io::copy(&mut response.bytes().await?.as_ref(), &mut file)?;
+        Ok(())
     }
 }
