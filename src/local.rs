@@ -1,5 +1,6 @@
 use std::io::prelude::*;
 use std::{fs::File, io::BufReader, path::PathBuf};
+use tokio::task;
 
 use serde::Deserialize;
 
@@ -9,21 +10,29 @@ pub async fn get_local_deck(path: PathBuf) -> anyhow::Result<Deck> {
     let file = File::open(path)?;
     let reader = BufReader::new(file);
 
-    let mut cards: Vec<Card> = Vec::new();
-    let mut tokens: Vec<Card> = Vec::new();
-
+    // Collect lines into a Vec
+    let mut lines = Vec::new();
     for line in reader.lines() {
-        let line = line?;
+        lines.push(line?);
+    }
 
-        let (parsed_cards, parsed_tokens) = parse_card(&line).await?;
+    // Create a vector of tasks
+    let tasks: Vec<_> = lines
+        .into_iter()
+        .map(|line| {
+            let line = line.clone();
+            task::spawn(async move { parse_card(&line).await })
+        })
+        .collect();
 
-        for card in parsed_cards {
-            cards.push(card);
-        }
+    // Collect results from tasks
+    let mut cards = Vec::new();
+    let mut tokens = Vec::new();
 
-        for token in parsed_tokens {
-            tokens.push(token);
-        }
+    for task in tasks {
+        let (parsed_cards, parsed_tokens) = task.await??;
+        cards.extend(parsed_cards);
+        tokens.extend(parsed_tokens);
     }
 
     Ok(Deck {
@@ -85,7 +94,11 @@ async fn parse_card(line: &str) -> anyhow::Result<(Vec<Card>, Vec<Card>)> {
     Ok((cards, tokens))
 }
 
-async fn get_card_details(name: &str, set: &str, collector_number: &str) -> anyhow::Result<ScryfallCard> {
+async fn get_card_details(
+    name: &str,
+    set: &str,
+    collector_number: &str,
+) -> anyhow::Result<ScryfallCard> {
     let client = reqwest::Client::builder()
         .user_agent("curl/7.68.0")
         .default_headers({
@@ -100,8 +113,13 @@ async fn get_card_details(name: &str, set: &str, collector_number: &str) -> anyh
 
     let resp = client
         .get("https://api.scryfall.com/cards/named")
-        .query(&[("exact", name), ("set", set), ("collector_number", collector_number)])
-        .send().await?;
+        .query(&[
+            ("exact", name),
+            ("set", set),
+            ("collector_number", collector_number),
+        ])
+        .send()
+        .await?;
 
     let card: ScryfallCard = resp.json().await?;
 
