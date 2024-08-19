@@ -7,6 +7,11 @@ use tiffer::source::Source;
 #[derive(Parser, Debug)]
 #[command(version, about, long_about)]
 struct Cli {
+    #[clap(short, long)]
+    no_tokens: bool,
+    #[clap(short, long)]
+    filename: Option<String>,
+
     source: Source,
 }
 
@@ -26,8 +31,8 @@ async fn main() -> anyhow::Result<()> {
     };
 
     deck.generate(tiffer::deck::DeckGenerationOptions {
-        filename: None,
-        print_tokens: true,
+        filename: args.filename,
+        print_tokens: !args.no_tokens,
     })
     .await?;
 

@@ -68,7 +68,13 @@ impl Deck {
         // Create a vector of tasks
         let mut tasks = Vec::new();
 
-        for card in self.cards.iter().chain(self.tokens.iter()) {
+        let mut cards = Vec::new();
+        cards.extend(self.cards.iter().cloned()); // assuming `Card` implements `Clone`
+        if options.print_tokens {
+            cards.extend(self.tokens.iter().cloned()); // assuming `Token` implements `Clone`
+        }
+
+        for card in cards {
             let client = Arc::clone(&client);
             let card = card.clone(); // Assuming `Card` implements `Clone`
             let cache_dir = cache_dir.clone();
@@ -87,22 +93,32 @@ impl Deck {
     }
 
     pub async fn generate(&self, options: DeckGenerationOptions) -> anyhow::Result<()> {
-        println!("Generating deck: {}", self.name);
-        println!(
-            "Total cards: {} ({} mainboard, {} tokens)",
-            self.total_cards(),
-            self.cards.len(),
-            self.tokens.len()
-        );
+        println!("Generating deck: {}", &options.filename.clone().unwrap_or_else(|| self.name.clone()));
+        match options.print_tokens {
+            true => println!(
+                "Total cards: {} ({} mainboard, {} tokens)",
+                self.total_cards(),
+                self.cards.len(),
+                self.tokens.len()
+            ),
+            false => {
+                println!("Skipping tokens...");
+                println!(
+                    "Total cards: {} ({} mainboard)",
+                    self.total_cards(),
+                    self.cards.len()
+                )
+            }
+        }
 
-        self.download(options).await?;
+        self.download(options.clone()).await?;
 
-        self.pdf()?;
+        self.pdf(options)?;
 
         Ok(())
     }
 
-    fn pdf(&self) -> anyhow::Result<()> {
+    fn pdf(&self, options: DeckGenerationOptions) -> anyhow::Result<()> {
         let cache_dir = self.cache_dir();
 
         let (doc, page_idx, layer_idx) = PdfDocument::new("Deck", Mm(210.0), Mm(297.0), "Layer");
@@ -167,7 +183,8 @@ impl Deck {
             x += card_width;
         }
 
-        let mut buffer = BufWriter::new(File::create(format!("{}.pdf", self.name)).unwrap());
+        let filename = options.filename.clone().unwrap_or_else(|| format!("{}.pdf", self.name));
+        let mut buffer = BufWriter::new(File::create(filename).unwrap());
         doc.save(&mut buffer).unwrap();
 
         Ok(())
