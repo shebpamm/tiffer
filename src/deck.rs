@@ -3,14 +3,17 @@ extern crate printpdf;
 use std::fs::{self, File};
 use std::io::BufWriter;
 use std::sync::Arc;
+use std::time::Duration;
 
 use printpdf::path::{PaintMode, WindingOrder};
 use printpdf::*;
 
+use reqwest::header::{HeaderValue, RETRY_AFTER};
 use reqwest::Client;
 use serde::Deserialize;
 use serde::Serialize;
 use tokio::task;
+use tokio::time::sleep;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct DeckGenerationOptions {
@@ -56,9 +59,7 @@ impl Deck {
             let client = Arc::clone(&client);
             let card = card.clone(); // Assuming `Card` implements `Clone`
 
-            let task = task::spawn(async move {
-                card.download(&client).await
-            });
+            let task = task::spawn(async move { card.download(&client).await });
 
             tasks.push(task);
         }
@@ -171,15 +172,83 @@ impl Card {
     }
 
     pub async fn download(&self, client: &Client) -> anyhow::Result<()> {
-        if std::fs::metadata(format!("{}/{}.jpg", "cards", self.scryfall_id)).is_ok() {
+        let file_path = format!("{}/{}.jpg", "cards", self.scryfall_id);
+        if fs::metadata(&file_path).is_ok() {
             println!("Skipping {}", self.name);
             return Ok(());
         }
 
         println!("Downloading {}", self.name);
-        let response = client.get(self.image_url()).send().await?;
-        let mut file = std::fs::File::create(format!("{}/{}.jpg", "cards", self.scryfall_id))?;
-        std::io::copy(&mut response.bytes().await?.as_ref(), &mut file)?;
-        Ok(())
+
+        const MAX_RETRIES: usize = 5;
+
+        let mut attempts = 0;
+
+        while attempts < MAX_RETRIES {
+            attempts += 1;
+            let response = client.get(self.image_url()).send().await;
+
+            match response {
+                Ok( resp) => {
+                    if resp.status().is_success() {
+                        let mut file = fs::File::create(&file_path)?;
+                        std::io::copy(&mut resp.bytes().await?.as_ref(), &mut file)?;
+                        println!("Successfully downloaded {}", self.name);
+                        return Ok(());
+                    } else if resp.status().as_u16() == 429 {
+                        // Rate limit exceeded, retry after backoff
+                        println!("Rate limit exceeded, retrying {}...", self.name);
+                        if let Some(retry_after) = resp.headers().get(RETRY_AFTER) {
+                            let delay = parse_retry_after_header(retry_after)?;
+                            sleep(Duration::from_secs(delay)).await;
+                        } else {
+                            // Default backoff if Retry-After header is missing
+                            let delay = 2u64.pow(attempts as u32);
+                            sleep(Duration::from_secs(delay)).await;
+                        }
+                    } else {
+                        // Other errors, return the result
+                        return Err(anyhow::anyhow!(
+                            "Failed to download {}: {}",
+                            self.name,
+                            resp.status()
+                        ));
+                    }
+                }
+                Err(e) => {
+                    // Handle request error
+                    println!("Error occurred while downloading {}: {}", self.name, e);
+                    if attempts >= MAX_RETRIES {
+                        return Err(anyhow::anyhow!(
+                            "Failed to download {} after {} attempts",
+                            self.name,
+                            MAX_RETRIES
+                        ));
+                    }
+                    // Default backoff if request fails
+                    let delay = 2u64.pow(attempts as u32);
+                    sleep(Duration::from_secs(delay)).await;
+                }
+            }
+        }
+
+        Err(anyhow::anyhow!(
+            "Failed to download {} after {} attempts",
+            self.name,
+            MAX_RETRIES
+        ))
     }
+}
+
+// Helper function to parse Retry-After header
+fn parse_retry_after_header(header: &HeaderValue) -> anyhow::Result<u64> {
+    if let Ok(s) = header.to_str() {
+        if let Ok(seconds) = s.parse::<u64>() {
+            return Ok(seconds);
+        }
+        // Retry-After header is a date-time
+        // Parse the date-time format if needed
+    }
+    // Return a default value if parsing fails
+    Ok(60) // Default to 60 seconds
 }
