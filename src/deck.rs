@@ -5,6 +5,7 @@ use std::io::{BufReader, BufWriter};
 use std::sync::Arc;
 use std::time::Duration;
 
+use indicatif::ProgressBar;
 use printpdf::path::{PaintMode, WindingOrder};
 use printpdf::*;
 
@@ -68,18 +69,27 @@ impl Deck {
         // Create a vector of tasks
         let mut tasks = Vec::new();
 
+        let bar = ProgressBar::new(self.total_cards() as u64);
+
         let mut cards = Vec::new();
         cards.extend(self.cards.iter().cloned()); // assuming `Card` implements `Clone`
         if options.print_tokens {
             cards.extend(self.tokens.iter().cloned()); // assuming `Token` implements `Clone`
         }
 
+        println!("Downloading cards...");
         for card in cards {
             let client = Arc::clone(&client);
             let card = card.clone(); // Assuming `Card` implements `Clone`
             let cache_dir = cache_dir.clone();
+            let bar = bar.clone();
 
-            let task = task::spawn(async move { card.download(cache_dir.clone(), &client).await });
+            let task = task::spawn(async move { 
+                let download = card.download(cache_dir.clone(), &client).await;
+                bar.inc(1);
+
+                download
+            });
 
             tasks.push(task);
         }
@@ -146,9 +156,20 @@ impl Deck {
         };
 
         // layer.add_polygon(line);
+        
+        let bar = ProgressBar::new(match options.print_tokens {
+            true => self.total_cards() as u64,
+            false => self.cards.len() as u64,
+        });
+        println!("Rendering cards...");
 
-        for card in self.cards.iter().chain(self.tokens.iter()) {
-            println!("Rendering {}", card.name);
+        let mut cards = Vec::new();
+        cards.extend(self.cards.iter().cloned());
+        if options.print_tokens {
+            cards.extend(self.tokens.iter().cloned());
+        }
+        for card in cards {
+            log::debug!("Rendering {}", card.name);
             let mut image_file = BufReader::new(
                 File::open(format!("{}/{}.jpg", cache_dir, card.scryfall_id)).unwrap(),
             );
@@ -181,6 +202,8 @@ impl Deck {
             );
 
             x += card_width;
+
+            bar.inc(1);
         }
 
         let filename = options.filename.clone().unwrap_or_else(|| format!("{}.pdf", self.name));
@@ -208,11 +231,11 @@ impl Card {
     pub async fn download(&self, cache: String, client: &Client) -> anyhow::Result<()> {
         let file_path = format!("{}/{}.jpg", cache, self.scryfall_id);
         if fs::metadata(&file_path).is_ok() {
-            println!("Skipping {}", self.name);
+            log::debug!("Skipping {}", self.name);
             return Ok(());
         }
 
-        println!("Downloading {}", self.name);
+        log::debug!("Downloading {}", self.name);
 
         const MAX_RETRIES: usize = 5;
 
@@ -227,7 +250,7 @@ impl Card {
                     if resp.status().is_success() {
                         let mut file = fs::File::create(&file_path)?;
                         std::io::copy(&mut resp.bytes().await?.as_ref(), &mut file)?;
-                        println!("Successfully downloaded {}", self.name);
+                        log::debug!("Successfully downloaded {}", self.name);
                         return Ok(());
                     } else if resp.status().as_u16() == 429 {
                         // Rate limit exceeded, retry after backoff

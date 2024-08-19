@@ -1,6 +1,7 @@
 use std::io::prelude::*;
 use std::time::Duration;
 use std::{fs::File, io::BufReader, path::PathBuf};
+use indicatif::ProgressBar;
 use reqwest::header::HeaderMap;
 use tokio::task;
 
@@ -19,12 +20,20 @@ pub async fn get_local_deck(path: PathBuf) -> anyhow::Result<Deck> {
         lines.push(line?);
     }
 
+    // Create a progress bar
+    let bar = ProgressBar::new(lines.len() as u64);
+
     // Create a vector of tasks
     let tasks: Vec<_> = lines
         .into_iter()
         .map(|line| {
             let line = line.clone();
-            task::spawn(async move { parse_card(&line).await })
+            let bar = bar.clone();
+            task::spawn(async move { 
+                let parse = parse_card(&line).await;
+                bar.inc(1);
+                parse
+            })
         })
         .collect();
 
@@ -67,7 +76,7 @@ async fn parse_card(line: &str) -> anyhow::Result<(Vec<Card>, Vec<Card>)> {
     let set = parts[parts.len() - 2].trim_matches(|c: char| !c.is_alphabetic());
     let collector_number = parts[parts.len() - 1];
 
-    println!("{} {} {} {}", quantity, name, set, collector_number);
+    log::debug!("{} {} {} {}", quantity, name, set, collector_number);
 
     let details = match get_card_details(&name, set, collector_number).await {
         Ok(details) => details,
