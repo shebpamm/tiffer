@@ -1,7 +1,7 @@
 extern crate printpdf;
 
 use std::fs::{self, File};
-use std::io::BufWriter;
+use std::io::{BufReader, BufWriter};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -118,7 +118,7 @@ impl Deck {
         for card in self.cards.iter().chain(self.tokens.iter()) {
             println!("Rendering {}", card.name);
             let mut image_file =
-                File::open(format!("{}/{}.jpg", "cards", card.scryfall_id)).unwrap();
+                BufReader::new(File::open(format!("{}/{}.jpg", "cards", card.scryfall_id)).unwrap());
             let image = Image::try_from(
                 image_crate::codecs::jpeg::JpegDecoder::new(&mut image_file).unwrap(),
             )
