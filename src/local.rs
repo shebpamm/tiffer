@@ -1,8 +1,11 @@
 use std::io::prelude::*;
+use std::time::Duration;
 use std::{fs::File, io::BufReader, path::PathBuf};
+use reqwest::header::HeaderMap;
 use tokio::task;
 
 use serde::Deserialize;
+use tokio::time::sleep;
 
 use crate::deck::{Card, Deck};
 
@@ -66,7 +69,13 @@ async fn parse_card(line: &str) -> anyhow::Result<(Vec<Card>, Vec<Card>)> {
 
     println!("{} {} {} {}", quantity, name, set, collector_number);
 
-    let details = get_card_details(&name, set, collector_number).await?;
+    let details = match get_card_details(&name, set, collector_number).await {
+        Ok(details) => details,
+        Err(e) => {
+            eprintln!("Failed to get card details for {}: {}", name, e);
+            return Err(e);
+        }
+    };
 
     let mut cards = Vec::new();
     let mut tokens = Vec::new();
@@ -99,10 +108,13 @@ async fn get_card_details(
     set: &str,
     collector_number: &str,
 ) -> anyhow::Result<ScryfallCard> {
+    const MAX_RETRIES: u32 = 5;
+    const INITIAL_BACKOFF_SECS: u64 = 1;
+
     let client = reqwest::Client::builder()
         .user_agent("curl/7.68.0")
         .default_headers({
-            let mut headers = reqwest::header::HeaderMap::new();
+            let mut headers = HeaderMap::new();
             headers.insert(
                 reqwest::header::ACCEPT,
                 reqwest::header::HeaderValue::from_static("application/json"),
@@ -111,17 +123,46 @@ async fn get_card_details(
         })
         .build()?;
 
-    let resp = client
-        .get("https://api.scryfall.com/cards/named")
-        .query(&[
-            ("exact", name),
-            ("set", set),
-            ("collector_number", collector_number),
-        ])
-        .send()
-        .await?;
+    let mut attempt = 0;
 
-    let card: ScryfallCard = resp.json().await?;
+    while attempt < MAX_RETRIES {
+        let resp = client
+            .get("https://api.scryfall.com/cards/named")
+            .query(&[
+                ("exact", name),
+                ("set", set),
+                ("collector_number", collector_number),
+            ])
+            .send()
+            .await?;
 
-    Ok(card)
+        if resp.status().is_success() {
+            let card: ScryfallCard = resp
+                .json()
+                .await?;
+            return Ok(card);
+        } else if resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+            // Extract the retry-after duration from the headers if available
+            if let Some(retry_after_header) = resp.headers().get("Retry-After") {
+                if let Ok(retry_after) = retry_after_header.to_str().unwrap().parse::<u64>() {
+                    let backoff_duration = Duration::from_secs(retry_after);
+                    eprintln!("Rate limit exceeded. Retrying after {} seconds...", retry_after);
+                    sleep(backoff_duration).await;
+                } else {
+                    eprintln!("Rate limit exceeded but no valid Retry-After header provided.");
+                    // Use a default backoff duration if Retry-After header is invalid
+                    sleep(Duration::from_secs(INITIAL_BACKOFF_SECS)).await;
+                }
+            } else {
+                eprintln!("Rate limit exceeded but no Retry-After header found. Using default backoff.");
+                sleep(Duration::from_secs(INITIAL_BACKOFF_SECS)).await;
+            }
+        } else {
+            return Err(anyhow::anyhow!("Failed to get card details: {}", resp.status()));
+        }
+
+        attempt += 1;
+    }
+
+    Err(anyhow::anyhow!("Exceeded maximum number of retries"))
 }

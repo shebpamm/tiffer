@@ -1,7 +1,8 @@
 extern crate printpdf;
 
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::BufWriter;
+use std::sync::Arc;
 
 use printpdf::path::{PaintMode, WindingOrder};
 use printpdf::*;
@@ -9,7 +10,9 @@ use printpdf::*;
 use reqwest::Client;
 use serde::Deserialize;
 use serde::Serialize;
+use tokio::task;
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct DeckGenerationOptions {
     pub print_tokens: bool,
     pub filename: Option<String>,
@@ -28,9 +31,9 @@ impl Deck {
     }
 
     pub async fn download(&self, options: DeckGenerationOptions) -> anyhow::Result<()> {
-        std::fs::create_dir_all("cards")?;
+        fs::create_dir_all("cards")?;
 
-        // make sure to add User-Agent and Accept headers
+        // Create reqwest client
         let client = reqwest::Client::builder()
             .user_agent("curl/7.68.0")
             .default_headers({
@@ -43,8 +46,26 @@ impl Deck {
             })
             .build()?;
 
+        // Wrap the client in an Arc to share between tasks
+        let client = Arc::new(client);
+
+        // Create a vector of tasks
+        let mut tasks = Vec::new();
+
         for card in self.cards.iter().chain(self.tokens.iter()) {
-            card.download(&client).await?;
+            let client = Arc::clone(&client);
+            let card = card.clone(); // Assuming `Card` implements `Clone`
+
+            let task = task::spawn(async move {
+                card.download(&client).await
+            });
+
+            tasks.push(task);
+        }
+
+        // Await all tasks
+        for task in tasks {
+            task.await??;
         }
 
         Ok(())
@@ -135,7 +156,7 @@ impl Deck {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Card {
     pub name: String,
     pub scryfall_id: String,
