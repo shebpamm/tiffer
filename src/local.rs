@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::io::prelude::*;
 use std::time::Duration;
 use std::{fs::File, io::BufReader, path::PathBuf};
@@ -59,6 +60,11 @@ struct ScryfallCard {
     name: String,
     id: String,
     all_parts: Option<Vec<ScryfallRelatedCard>>,
+    card_faces: Option<Vec<ScryfallCardFace>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ScryfallCardFace {
 }
 
 #[derive(Debug, Deserialize)]
@@ -92,7 +98,16 @@ async fn parse_card(line: &str) -> anyhow::Result<(Vec<Card>, Vec<Card>)> {
         let card = Card {
             name: details.name.clone(),
             scryfall_id: details.id.clone(),
+            backface: false,
         };
+
+        if details.card_faces.is_some() {
+            cards.push(Card {
+                name: details.name.clone(),
+                scryfall_id: details.id.clone(),
+                backface: true,
+            });
+        }
 
         if let Some(details) = &details.all_parts {
             for related in details {
@@ -100,6 +115,7 @@ async fn parse_card(line: &str) -> anyhow::Result<(Vec<Card>, Vec<Card>)> {
                     let token = Card {
                         name: related.name.clone(),
                         scryfall_id: related.id.clone(),
+                        backface: false,
                     };
                     tokens.push(token);
                 }

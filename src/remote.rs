@@ -69,12 +69,14 @@ async fn get_moxfield_deck(url: Url) -> anyhow::Result<Deck> {
     cards.push(Card {
         name: response.main.name,
         scryfall_id: response.main.scryfall_id,
+        backface: false,
     });
     for card in response.mainboard.values() {
         for _ in 0..card.quantity {
             cards.push(Card {
                 name: card.card.name.clone(),
                 scryfall_id: card.card.scryfall_id.clone(),
+                backface: false,
             });
         }
     }
@@ -84,6 +86,7 @@ async fn get_moxfield_deck(url: Url) -> anyhow::Result<Deck> {
         tokens.push(Card {
             name: card.name.clone(),
             scryfall_id: card.scryfall_id.clone(),
+            backface: false,
         });
     }
 

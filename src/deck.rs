@@ -84,7 +84,7 @@ impl Deck {
             let cache_dir = cache_dir.clone();
             let bar = bar.clone();
 
-            let task = task::spawn(async move { 
+            let task = task::spawn(async move {
                 let download = card.download(cache_dir.clone(), &client).await;
                 bar.inc(1);
 
@@ -103,7 +103,13 @@ impl Deck {
     }
 
     pub async fn generate(&self, options: DeckGenerationOptions) -> anyhow::Result<()> {
-        println!("Generating deck: {}", &options.filename.clone().unwrap_or_else(|| self.name.clone()));
+        println!(
+            "Generating deck: {}",
+            &options
+                .filename
+                .clone()
+                .unwrap_or_else(|| self.name.clone())
+        );
         match options.print_tokens {
             true => println!(
                 "Total cards: {} ({} mainboard, {} tokens)",
@@ -156,7 +162,7 @@ impl Deck {
         };
 
         // layer.add_polygon(line);
-        
+
         let bar = ProgressBar::new(match options.print_tokens {
             true => self.total_cards() as u64,
             false => self.cards.len() as u64,
@@ -171,7 +177,7 @@ impl Deck {
         for card in cards {
             log::debug!("Rendering {}", card.name);
             let mut image_file = BufReader::new(
-                File::open(format!("{}/{}.jpg", cache_dir, card.scryfall_id)).unwrap(),
+                File::open(card.cached_path(cache_dir.clone())).expect("Failed to open file"),
             );
             let image = Image::try_from(
                 image_crate::codecs::jpeg::JpegDecoder::new(&mut image_file).unwrap(),
@@ -206,7 +212,10 @@ impl Deck {
             bar.inc(1);
         }
 
-        let filename = options.filename.clone().unwrap_or_else(|| format!("{}.pdf", self.name));
+        let filename = options
+            .filename
+            .clone()
+            .unwrap_or_else(|| format!("{}.pdf", self.name));
         let mut buffer = BufWriter::new(File::create(filename).unwrap());
         doc.save(&mut buffer).unwrap();
 
@@ -218,18 +227,34 @@ impl Deck {
 pub struct Card {
     pub name: String,
     pub scryfall_id: String,
+    pub backface: bool,
 }
 
 impl Card {
     pub fn image_url(&self) -> String {
+        if self.backface {
+            return format!(
+                "https://api.scryfall.com/cards/{}/?format=image&face=back",
+                self.scryfall_id
+            );
+        }
+
         format!(
             "https://api.scryfall.com/cards/{}/?format=image",
             self.scryfall_id
         )
     }
 
+    pub fn cached_path(&self, cache: String) -> String {
+        match self.backface {
+            false => format!("{}/{}.jpg", cache, self.scryfall_id),
+            true => format!("{}/{}_back.jpg", cache, self.scryfall_id),
+        }
+    }
+
     pub async fn download(&self, cache: String, client: &Client) -> anyhow::Result<()> {
-        let file_path = format!("{}/{}.jpg", cache, self.scryfall_id);
+        let file_path = self.cached_path(cache);
+
         if fs::metadata(&file_path).is_ok() {
             log::debug!("Skipping {}", self.name);
             return Ok(());
